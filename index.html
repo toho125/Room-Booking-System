@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>강의실 예약</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7280; --line:#dde1e7;
+          --accent:#2f5bd3; --ok:#15803d; --okbg:#e7f6ec; --bad:#c62828; --badbg:#fdecec; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:system-ui, -apple-system, "Malgun Gothic", sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; font-size:.9rem; }
+  #status { padding:10px 12px; border-radius:8px; background:#fff7d6; margin-bottom:16px; font-size:.9rem; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:1.1rem; margin:0 0 12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); gap:10px; }
+  label { display:flex; flex-direction:column; font-size:.85rem; color:var(--muted); gap:4px; }
+  input { font:inherit; padding:9px 10px; border:1px solid var(--line); border-radius:8px; color:var(--text); background:#fff; width:100%; }
+  button { margin-top:12px; font:inherit; font-weight:600; padding:10px 18px; border:0; border-radius:8px;
+           background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .result { margin-top:12px; padding:14px; border-radius:10px; font-size:1.6rem; font-weight:800; text-align:center; display:none; }
+  .result.ok { display:block; background:var(--okbg); color:var(--ok); }
+  .result.bad { display:block; background:var(--badbg); color:var(--bad); border:2px solid var(--bad); }
+  .result small { display:block; font-size:.85rem; font-weight:400; margin-top:4px; color:var(--text); }
+  table { width:100%; border-collapse:collapse; margin-top:12px; }
+  th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--muted); font-weight:600; font-size:.85rem; }
+  .empty { color:var(--muted); margin-top:12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>강의실 예약</h1>
+  <p class="sub">강의실 A101 · A102 · B201 / 월~금 / 9시~21시 (정수 시각)</p>
+  <div id="status">예약 프로그램(solution.py)을 불러오는 중… 처음엔 10~20초 걸릴 수 있어요.</div>
+
+  <datalist id="rooms"><option value="A101"><option value="A102"><option value="B201"></datalist>
+  <datalist id="days"><option value="월"><option value="화"><option value="수"><option value="목"><option value="금"></datalist>
+
+  <section>
+    <h2>예약하기</h2>
+    <div class="grid">
+      <label>이름<input id="b-name" placeholder="김민수"></label>
+      <label>강의실<input id="b-room" list="rooms" placeholder="A101"></label>
+      <label>요일<input id="b-day" list="days" placeholder="월"></label>
+      <label>시작(시)<input id="b-start" inputmode="decimal" placeholder="10"></label>
+      <label>끝(시)<input id="b-end" inputmode="decimal" placeholder="12"></label>
+    </div>
+    <button id="b-btn" disabled>예약</button>
+    <div id="b-result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>취소하기</h2>
+    <div class="grid">
+      <label>이름<input id="c-name" placeholder="김민수"></label>
+      <label>강의실<input id="c-room" list="rooms" placeholder="A101"></label>
+      <label>요일<input id="c-day" list="days" placeholder="월"></label>
+      <label>시작(시)<input id="c-start" inputmode="decimal" placeholder="10"></label>
+    </div>
+    <button id="c-btn" disabled>취소</button>
+    <div id="c-result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>시간표</h2>
+    <div class="grid">
+      <label>강의실<input id="s-room" list="rooms" value="A101"></label>
+      <label>요일<input id="s-day" list="days" value="월"></label>
+    </div>
+    <button id="s-btn" disabled>시간표 보기</button>
+    <div id="s-out"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+// 예약 규칙은 전부 solution.py 의 RoomBooking 이 판단한다. 이 페이지는 입력을 넘기고 결과만 보여준다.
+let rb = null;
+const $ = (id) => document.getElementById(id);
+
+// 입력칸 글자를 그대로 넘기되, 숫자면 숫자로 바꿔 준다 (10 → int, 10.5 → float, 그 외 → 글자 그대로)
+function toValue(s) {
+  const t = s.trim();
+  if (t !== "" && !isNaN(Number(t))) return Number(t);
+  return t;
+}
+
+function show(el, ok, okText, badText) {
+  el.className = "result " + (ok ? "ok" : "bad");
+  el.innerHTML = ok ? "✅ 성공<small>" + okText + "</small>" : "❌ 실패<small>" + badText + "</small>";
+}
+
+function call(fn) {
+  try { return fn(); }
+  catch (e) { console.error(e); return null; }
+}
+
+async function main() {
+  try {
+    const pyodide = await loadPyodide();
+    const src = await (await fetch("solution.py?v=" + Date.now(), { cache: "no-store" })).text();
+    pyodide.FS.writeFile("solution.py", src);
+    pyodide.runPython("import sys; sys.path.insert(0, '.')");
+    const RoomBooking = pyodide.pyimport("solution").RoomBooking;
+    rb = RoomBooking();
+    $("status").style.display = "none";
+    for (const id of ["b-btn", "c-btn", "s-btn"]) $(id).disabled = false;
+    renderSchedule();
+  } catch (e) {
+    $("status").textContent = "불러오기 실패: " + e;
+    $("status").style.background = "var(--badbg)";
+  }
+}
+
+$("b-btn").onclick = () => {
+  const room = $("b-room").value.trim(), day = $("b-day").value.trim();
+  const ok = call(() => rb.book(room, day, toValue($("b-start").value), toValue($("b-end").value), $("b-name").value.trim()));
+  show($("b-result"), ok === true, "예약되었습니다.", "예약이 거절되었습니다.");
+  if (ok === true) { $("s-room").value = room; $("s-day").value = day; }
+  renderSchedule();
+};
+
+$("c-btn").onclick = () => {
+  const ok = call(() => rb.cancel($("c-room").value.trim(), $("c-day").value.trim(), toValue($("c-start").value), $("c-name").value.trim()));
+  show($("c-result"), ok === true, "취소되었습니다.", "취소할 수 없습니다.");
+  renderSchedule();
+};
+
+$("s-btn").onclick = renderSchedule;
+
+function renderSchedule() {
+  if (!rb) return;
+  const room = $("s-room").value.trim(), day = $("s-day").value.trim();
+  const py = call(() => rb.get_schedule(room, day));
+  const rows = py ? py.toJs() : [];
+  if (py && py.destroy) py.destroy();
+  const out = $("s-out");
+  out.textContent = "";
+  if (rows.length === 0) {
+    out.innerHTML = '<p class="empty"></p>';
+    out.firstChild.textContent = room + " · " + day + " — 예약 없음";
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = "<thead><tr><th>시간</th><th>예약자</th></tr></thead>";
+  const body = document.createElement("tbody");
+  for (const [s, e, name] of rows) {
+    const tr = document.createElement("tr");
+    const td1 = document.createElement("td"); td1.textContent = s + "시 ~ " + e + "시";
+    const td2 = document.createElement("td"); td2.textContent = name;
+    tr.append(td1, td2); body.append(tr);
+  }
+  table.append(body);
+  const cap = document.createElement("p");
+  cap.className = "empty"; cap.textContent = room + " · " + day;
+  out.append(cap, table);
+}
+
+main();
+</script>
+</body>
+</html>
